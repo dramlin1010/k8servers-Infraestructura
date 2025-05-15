@@ -57,6 +57,7 @@ apt-get -y install ./build/amazon-efs-utils*deb
 cd / && rm -rf /opt/installers/efs-utils
 echo "amazon-efs-utils instalado."
 # --- Fin Instalación de Rust y amazon-efs-utils ---
+
 # Instalar K3s
 echo "Instalando K3s..."
 curl -sfL https://get.k3s.io | \
@@ -223,10 +224,18 @@ PANEL_PVC_NAME="panel-web-efs-pvc"
 PANEL_DEPLOYMENT_NAME="panel-web-dep"
 PANEL_SERVICE_NAME="panel-web-svc"
 PANEL_INGRESS_NAME="panel-web-ing"
-PANEL_IMAGE_NAME="280972575853.dkr.ecr.us-east-1.amazonaws.com/web/k8servers:v1"
 PANEL_DOMAIN_NAME="${var.base_domain}"
 PANEL_TLS_SECRET_NAME="panel-web-tls"
-WEB_DOC_ROOT_IN_POD="/var/www/html/public"
+WEB_DOC_ROOT_IN_POD="/var/www/html/"
+
+PHP_FPM_DEPLOYMENT_NAME="php-fpm-dep"
+PHP_FPM_SERVICE_NAME="php-fpm-svc"
+PHP_FPM_IMAGE_NAME="280972575853.dkr.ecr.us-east-1.amazonaws.com/web/k8servers:v1"
+
+NGINX_DEPLOYMENT_NAME="nginx-dep"
+NGINX_SERVICE_NAME="nginx-svc"
+NGINX_CONFIGMAP_NAME="nginx-vhost-conf-cm"
+NGINX_IMAGE_NAME="nginx:alpine" # Imagen estándar de Nginx
 
 # Configuración de AWS CLI para root (usando /root/.aws)
 echo "Configurando credenciales AWS CLI para root..."
@@ -292,51 +301,139 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: panel-web-dep
+  name: $${PHP_FPM_DEPLOYMENT_NAME}
   labels:
-    app: panel-web
+    app: php-fpm-app
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: panel-web
+      app: php-fpm-app
   template:
     metadata:
       labels:
-        app: panel-web
+        app: php-fpm-app
     spec:
+      securityContext:
+        fsGroup: 101
       imagePullSecrets:
         - name: aws-ecr-creds
       containers:
-        - name: panel-web-container
-          image: 280972575853.dkr.ecr.us-east-1.amazonaws.com/web/k8servers:v1
+        - name: php-fpm-container
+          image: $${PHP_FPM_IMAGE_NAME}
           imagePullPolicy: Always
           ports:
-            - containerPort: 80
-          env:
-            - name: DOCUMENT_ROOT
-              value: "/var/www/html/public"
+            - name: fpm-port
+              containerPort: 9000
           volumeMounts:
-            - name: panel-efs-storage
-              mountPath: "/var/www/html/public"
+            - name: app-code-efs
+              mountPath: "/var/www/html"
       volumes:
-        - name: panel-efs-storage
+        - name: app-code-efs
           persistentVolumeClaim:
-            claimName: panel-web-efs-pvc
+            claimName: $${PANEL_PVC_NAME}
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: $${PANEL_SERVICE_NAME}
+  name: $${PHP_FPM_SERVICE_NAME}
   labels:
-    app: panel-web
+    app: php-fpm-app
 spec:
   selector:
-    app: panel-web
+    app: php-fpm-app
   ports:
-    - protocol: TCP
+    - name: fpm
+      protocol: TCP
+      port: 9000
+      targetPort: fpm-port
+  type: ClusterIP
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: $${NGINX_CONFIGMAP_NAME}
+data:
+  default.conf: |
+    server {
+        listen 80 default_server;
+        server_name _;
+        root /var/www/html/;
+        index index.php index.html;
+
+        location / {
+            try_files \$uri \$uri/ /index.php?\$query_string;
+        }
+
+        location ~ \.php\$ {
+            try_files \$uri =404;
+            fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+            fastcgi_pass $${PHP_FPM_SERVICE_NAME}.default.svc.cluster.local:9000;
+            fastcgi_index index.php;
+            fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+            fastcgi_param SCRIPT_NAME \$fastcgi_script_name;
+            include fastcgi_params;
+        }
+
+        location ~ /\.ht {
+            deny all;
+        }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: $${NGINX_DEPLOYMENT_NAME}
+  labels:
+    app: nginx-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-app
+  template:
+    metadata:
+      labels:
+        app: nginx-app
+    spec:
+      securityContext:
+        fsGroup: 101
+      containers:
+        - name: nginx-container
+          image: $${NGINX_IMAGE_NAME}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 80
+          volumeMounts:
+            - name: nginx-vhost-volume
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+            - name: app-code-efs
+              mountPath: "/var/www/html"
+      volumes:
+        - name: nginx-vhost-volume
+          configMap:
+            name: $${NGINX_CONFIGMAP_NAME}
+        - name: app-code-efs
+          persistentVolumeClaim:
+            claimName: $${PANEL_PVC_NAME}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: $${NGINX_SERVICE_NAME}
+  labels:
+    app: nginx-app
+spec:
+  selector:
+    app: nginx-app
+  ports:
+    - name: http
+      protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: http
+  type: ClusterIP
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -347,6 +444,7 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
+  ingressClassName: nginx
   tls:
     - hosts:
         - ${var.base_domain}
@@ -359,7 +457,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: $${PANEL_SERVICE_NAME}
+                name: $${NGINX_SERVICE_NAME}
                 port:
                   number: 80
 EOT_PANEL
