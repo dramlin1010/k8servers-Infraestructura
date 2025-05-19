@@ -17,7 +17,7 @@ if [ -z "$NODE_PRIVATE_IP" ]; then
 fi
 echo "IP Privada del Nodo: $NODE_PRIVATE_IP"
 
-apt-get install -y curl wget git unzip jq apt-transport-https ca-certificates gnupg lsb-release mariadb-server nfs-common
+apt-get install -y curl wget git unzip jq apt-transport-https ca-certificates gnupg lsb-release mariadb-server nfs-common php-cli php-mysql
 
 # Hacer accesible mariadb desde cualquier IP
 
@@ -531,5 +531,86 @@ mysql -u root -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';"
 
 mysql -u root -e "FLUSH PRIVILEGES;"
 echo "Base de Datos y Usuario creados/actualizados y privilegios concedidos."
+
+echo "Creando tablas en la base de datos '${DB_NAME}'..."
+
+mysql -u root -D "${DB_NAME}" -e "
+CREATE TABLE IF NOT EXISTS Cliente (
+    ClienteID INT AUTO_INCREMENT PRIMARY KEY,
+    Nombre VARCHAR(30) NOT NULL,
+    Apellidos VARCHAR(40) NOT NULL,
+    Email VARCHAR(35) NOT NULL UNIQUE,
+    Passwd varchar(255) NOT NULL,
+    Telefono VARCHAR(15) NOT NULL,
+    Pais VARCHAR(30) NOT NULL,
+    Direccion VARCHAR(50) NOT NULL,
+    Fecha_Registro DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    Imagen MEDIUMBLOB
+);"
+
+mysql -u root -D "${DB_NAME}" -e "
+CREATE TABLE IF NOT EXISTS Plan_Hosting (
+    PlanHostingID INT AUTO_INCREMENT PRIMARY KEY,
+    NombrePlan varchar(50) NOT NULL,
+    Dominio VARCHAR(50) NOT NULL,
+    SistemaOperativo VARCHAR(20) NOT NULL,
+    Disco VARCHAR(10) NOT NULL,
+    Precio DECIMAL(10, 2) NOT NULL
+);"
+
+mysql -u root -D "${DB_NAME}" -e "
+CREATE TABLE IF NOT EXISTS Cuenta_Hosting (
+    ClienteID INT NOT NULL,
+    PlanHostingID INT NOT NULL,
+    CuentaHostingID INT AUTO_INCREMENT PRIMARY KEY,
+    Dominio varchar(50) NOT NULL,
+    FechaInicio DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    Estado VARCHAR(10) NOT NULL DEFAULT 'activo' CHECK (Estado IN ('activo', 'inactivo', 'suspendido')),
+    AnchoBandaUsado INT NOT NULL DEFAULT 0,
+    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
+    FOREIGN KEY (PlanHostingID) REFERENCES Plan_Hosting(PlanHostingID) ON DELETE RESTRICT
+);"
+
+mysql -u root -D "${DB_NAME}" -e "
+CREATE TABLE IF NOT EXISTS Factura (
+    ClienteID INT NOT NULL,
+    CuentaHostingID INT NOT NULL,
+    FacturaID INT AUTO_INCREMENT PRIMARY KEY,
+    Descripcion VARCHAR(255) NOT NULL,
+    FechaEmision DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FechaVencimiento DATETIME,
+    SaldoTotal DECIMAL(10, 2) NOT NULL,
+    Estado VARCHAR(10) NOT NULL DEFAULT 'pendiente' CHECK (Estado IN ('pagado', 'pendiente', 'vencida')),
+    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
+    FOREIGN KEY (CuentaHostingID) REFERENCES Cuenta_Hosting(CuentaHostingID) ON DELETE CASCADE
+);"
+
+mysql -u root -D "${DB_NAME}" -e "
+CREATE TABLE IF NOT EXISTS Ticket_Soporte (
+    TicketID INT AUTO_INCREMENT PRIMARY KEY,
+    FechaCreacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    Asunto VARCHAR(100) NOT NULL,
+    Descripcion TEXT NOT NULL,
+    Estado VARCHAR(10) NOT NULL DEFAULT 'abierto' CHECK (Estado IN ('abierto', 'cerrado', 'pendiente')),
+    Prioridad VARCHAR(10) NOT NULL DEFAULT 'media' CHECK (Prioridad IN ('baja', 'media', 'alta', 'urgente')),
+    ClienteID INT NOT NULL,
+    CuentaHostingID INT,
+    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
+    FOREIGN KEY (CuentaHostingID) REFERENCES Cuenta_Hosting(CuentaHostingID) ON DELETE SET NULL
+);"
+
+echo "Tablas creadas (si no existían)."
+
+echo "Creando usuario administrador..."
+ADMIN_EMAIL="admin@k8servers.es"
+ADMIN_PASS_PLAIN="admin1234"
+ADMIN_PASS_HASH=$(php -r "echo password_hash('$ADMIN_PASS_PLAIN', PASSWORD_DEFAULT);")
+
+mysql -u root -D "${DB_NAME}" -e "
+INSERT INTO Cliente (Nombre, Apellidos, Email, Passwd, Telefono, Pais, Direccion, Fecha_Registro)
+VALUES ('Admin', 'K8Servers', '${ADMIN_EMAIL}', '${ADMIN_PASS_HASH}', '000000000', 'System', 'System Address', NOW())
+ON DUPLICATE KEY UPDATE Nombre='Admin', Apellidos='K8Servers', Passwd='${ADMIN_PASS_HASH}', Telefono='000000000', Pais='System', Direccion='System Address';
+"
+echo "Usuario administrador 'admin@k8servers.es' creado/actualizado."
 
 echo "--- User Data Script Finalizado ---"
