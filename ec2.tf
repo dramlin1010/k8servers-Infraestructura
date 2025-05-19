@@ -22,19 +22,15 @@ resource "aws_instance" "k3s_node" {
 
   user_data = <<-EOF
 #!/bin/bash
-exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1 # Cambiado el nombre del log si quieres
+exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
 set -e
 echo "--- Iniciando User Data con Payload Comprimido ---"
 
-# Leer el contenido del fichero que YA ESTÁ en Base64
 PAYLOAD_B64='${file("${path.module}/script/user_data.sh.gz.b64")}'
-# El 'echo' y las comillas simples alrededor de file() ayudan a manejar saltos de línea
-# que podrían estar en el fichero .b64 si no se usó -w 0, aunque es mejor asegurar -w 0.
 
 DECOMPRESSED_SCRIPT_PATH="/tmp/user_data.sh" # Nombre del script descomprimido
 
 echo "Decodificando y descomprimiendo payload..."
-# Quitar saltos de línea del payload si los hubiera, aunque -w 0 debería evitarlos
 echo "$${PAYLOAD_B64}" | tr -d '\n\r' | base64 -d | gzip -dc > "$${DECOMPRESSED_SCRIPT_PATH}"
 
 if [ ! -s "$${DECOMPRESSED_SCRIPT_PATH}" ]; then

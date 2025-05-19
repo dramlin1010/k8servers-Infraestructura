@@ -19,6 +19,29 @@ echo "IP Privada del Nodo: $NODE_PRIVATE_IP"
 
 apt-get install -y curl wget git unzip jq apt-transport-https ca-certificates gnupg lsb-release mariadb-server nfs-common
 
+# Hacer accesible mariadb desde cualquier IP
+
+MARIADB_CONFIG_FILE="/etc/mysql/mariadb.conf.d/50-server.cnf"
+
+if [ -f "$MARIADB_CONFIG_FILE" ]; then
+    echo "Configurando MariaDB para escuchar en todas las interfaces (0.0.0.0)..."
+    sed -i -E 's/^\s*bind-address\s*=\s*127\.0\.0\.1/#bind-address = 127.0.0.1/' "$MARIADB_CONFIG_FILE"
+    if ! grep -q "^\s*bind-address\s*=\s*0\.0\.0\.0" "$MARIADB_CONFIG_FILE"; then
+        if grep -q "\[mysqld\]" "$MARIADB_CONFIG_FILE"; then
+            sed -i '/\[mysqld\]/a bind-address = 0.0.0.0' "$MARIADB_CONFIG_FILE"
+        elif grep -q "\[mariadb\]" "$MARIADB_CONFIG_FILE"; then
+            sed -i '/\[mariadb\]/a bind-address = 0.0.0.0' "$MARIADB_CONFIG_FILE"
+        else
+            echo "ADVERTENCIA: No se encontró la sección [mysqld] o [mariadb] para añadir bind-address = 0.0.0.0. MariaDB podría no escuchar externamente."
+        fi
+    fi
+    echo "bind-address configurado."
+else
+    echo "ADVERTENCIA: No se encontró el fichero de configuración de MariaDB en $MARIADB_CONFIG_FILE. El bind-address podría no estar configurado para acceso externo."
+fi
+
+systemctl restart mariadb
+
 apt-get install -y unzip
 curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
 unzip awscliv2.zip
@@ -91,22 +114,46 @@ kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/
 echo "Esperando a que cert-manager este completamente disponible..."
 kubectl wait --for=condition=Available=True deployment --all -n cert-manager --timeout=300s
 
-echo "Creando ClusterIssuer letsencrypt-prod..."
-cat <<EOT_ISSUER | kubectl apply -f -
+
+# DEJAR ESTO PARA EL FINAL QUE SI NO LET'S ENCRYPT NO ME DEJA ASIGNAR EL CERTIFICADO
+# echo "Creando ClusterIssuer letsencrypt-prod..."
+# cat <<EOT_ISSUER | kubectl apply -f -
+# apiVersion: cert-manager.io/v1
+# kind: ClusterIssuer
+# metadata:
+#   name: letsencrypt-prod
+# spec:
+#   acme:
+#     server: https://acme-v02.api.letsencrypt.org/directory
+#     email: ${TF_VAR_admin_email} # O la variable que uses
+#     privateKeySecretRef:
+#       name: letsencrypt-prod-account-key
+#     solvers:
+#     - http01:
+#         ingress: {}
+# EOT_ISSUER
+# echo "ClusterIssuer letsencrypt-prod comentado/deshabilitado temporalmente."
+
+echo "Creando ClusterIssuer letsencrypt-staging..."
+cat <<EOT_STAGING_ISSUER | kubectl apply -f -
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: letsencrypt-prod
+  name: letsencrypt-staging
 spec:
   acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
     email: ${TF_VAR_admin_email}
     privateKeySecretRef:
-      name: letsencrypt-prod-account-key
+      name: letsencrypt-staging-account-key
     solvers:
     - http01:
-        ingress: {}
-EOT_ISSUER
+        ingress:
+          ingressClassName: nginx
+EOT_STAGING_ISSUER
+echo "ClusterIssuer letsencrypt-staging creado."
+
+
 
 echo "Instalando Python3 y pip (si no existen) y botocore..."
 apt-get install -y python3 python3-pip
@@ -167,7 +214,7 @@ PANEL_PV_NAME="panel-web-efs-pv"
 PANEL_PVC_NAME="panel-web-efs-pvc"
 PHP_FPM_DEPLOYMENT_NAME="php-fpm-dep"
 PHP_FPM_SERVICE_NAME="php-fpm-svc"
-PHP_FPM_IMAGE_NAME="280972575853.dkr.ecr.us-east-1.amazonaws.com/php-fpm-app:v1"
+PHP_FPM_IMAGE_NAME="280972575853.dkr.ecr.us-east-1.amazonaws.com/web/k8servers:v1"
 NGINX_DEPLOYMENT_NAME="nginx-dep"
 NGINX_SERVICE_NAME="nginx-svc"
 NGINX_CONFIGMAP_NAME="nginx-vhost-conf-cm"
@@ -380,7 +427,8 @@ metadata:
   labels:
     app: panel-web
   annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
+    #cert-manager.io/cluster-issuer: letsencrypt-prod
+    cert-manager.io/cluster-issuer: letsencrypt-staging
 spec:
   ingressClassName: nginx
   tls:
@@ -448,24 +496,40 @@ echo "Configuración SSHD para SFTP completada."
 echo "Configurando MariaDB..."
 systemctl start mariadb
 systemctl enable mariadb
-for i in {1..20}; do mysqladmin ping -u root &>/dev/null && break || sleep 3; done
+
+for i in {1..20}; do
+  if mysqladmin ping -u root &>/dev/null; then
+    echo "MariaDB está listo."
+    break
+  fi
+  echo "Esperando a MariaDB... intento $i"
+  sleep 3
+done
 if ! mysqladmin ping -u root &>/dev/null; then
-  echo "ERROR: MariaDB no parece estar listo después de 60 segundos."
-else
-  echo "MariaDB está listo."
+  echo "ERROR CRÍTICO: MariaDB no parece estar listo después de 60 segundos."
+  exit 1
 fi
 
 DB_NAME="k8servers"
 DB_USER="daniel"
 DB_PASSWORD="Kt3xa6RqSAgdpskCZyuWfX"
 
-echo "Creando Base de Datos '${DB_NAME}' y Usuario '${DB_USER}'..."
+echo "Creando Base de Datos '${DB_NAME}' y Usuario '${DB_USER}' para diferentes hosts..."
 mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+
+# Localhost
 mysql -u root -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';"
 mysql -u root -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';"
+
+# IP Privada del Nodo
+mysql -u root -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'${NODE_PRIVATE_IP}' IDENTIFIED BY '${DB_PASSWORD}';"
 mysql -u root -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'${NODE_PRIVATE_IP}';"
+
+# Cualquier Host (%)
+mysql -u root -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';"
 mysql -u root -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';"
+
 mysql -u root -e "FLUSH PRIVILEGES;"
-echo "Base de Datos y Usuario creados."
+echo "Base de Datos y Usuario creados/actualizados y privilegios concedidos."
 
 echo "--- User Data Script Finalizado ---"
