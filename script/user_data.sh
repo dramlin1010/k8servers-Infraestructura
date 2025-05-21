@@ -97,6 +97,7 @@ helm install ingress-nginx ingress-nginx/ingress-nginx \
   --set controller.hostPorts.https=true \
   --set controller.service.type=NodePort \
   --set controller.ingressClassResource.default=true \
+  --set controller.progressDeadlineSeconds=600 \
   --kubeconfig /root/.kube/config
 
 echo "Esperando a que ingress-nginx-controller este listo…"
@@ -534,70 +535,95 @@ echo "Base de Datos y Usuario creados/actualizados y privilegios concedidos."
 
 echo "Creando tablas en la base de datos '${DB_NAME}'..."
 
-mysql -u root -D "${DB_NAME}" -e "
+mysql -u root -D "${DB_NAME}" <<EOF
 CREATE TABLE IF NOT EXISTS Cliente (
     ClienteID INT AUTO_INCREMENT PRIMARY KEY,
-    Nombre VARCHAR(30) NOT NULL,
-    Apellidos VARCHAR(40) NOT NULL,
-    Email VARCHAR(35) NOT NULL UNIQUE,
-    Passwd varchar(255) NOT NULL,
-    Telefono VARCHAR(15) NOT NULL,
-    Pais VARCHAR(30) NOT NULL,
-    Direccion VARCHAR(50) NOT NULL,
+    Nombre VARCHAR(50) NOT NULL,
+    Apellidos VARCHAR(70) NOT NULL,
+    Email VARCHAR(100) NOT NULL UNIQUE,
+    Passwd VARCHAR(255) NOT NULL,
+    Telefono VARCHAR(20),
+    Pais VARCHAR(50),
+    Direccion VARCHAR(150),
     Fecha_Registro DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    Imagen MEDIUMBLOB
-);"
+    Token VARCHAR(255) NULL,
+    TokenExpira DATETIME NULL
+);
 
-mysql -u root -D "${DB_NAME}" -e "
 CREATE TABLE IF NOT EXISTS Plan_Hosting (
-    PlanHostingID INT AUTO_INCREMENT PRIMARY KEY,
-    NombrePlan varchar(50) NOT NULL,
-    Dominio VARCHAR(50) NOT NULL,
-    SistemaOperativo VARCHAR(20) NOT NULL,
-    Disco VARCHAR(10) NOT NULL,
-    Precio DECIMAL(10, 2) NOT NULL
-);"
+    PlanHostingID VARCHAR(50) PRIMARY KEY,
+    NombrePlan VARCHAR(100) NOT NULL,
+    Descripcion TEXT,
+    Precio DECIMAL(10, 2) NOT NULL,
+    Activo BOOLEAN NOT NULL DEFAULT TRUE
+);
 
-mysql -u root -D "${DB_NAME}" -e "
-CREATE TABLE IF NOT EXISTS Cuenta_Hosting (
+CREATE TABLE IF NOT EXISTS SitioWeb (
+    SitioID INT AUTO_INCREMENT PRIMARY KEY,
     ClienteID INT NOT NULL,
-    PlanHostingID INT NOT NULL,
-    CuentaHostingID INT AUTO_INCREMENT PRIMARY KEY,
-    Dominio varchar(50) NOT NULL,
-    FechaInicio DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    Estado VARCHAR(10) NOT NULL DEFAULT 'activo' CHECK (Estado IN ('activo', 'inactivo', 'suspendido')),
-    AnchoBandaUsado INT NOT NULL DEFAULT 0,
+    PlanHostingID VARCHAR(50) NOT NULL,
+    SubdominioElegido VARCHAR(63) NOT NULL,
+    DominioCompleto VARCHAR(255) NOT NULL UNIQUE,
+    EstadoServicio VARCHAR(30) NOT NULL DEFAULT 'pendiente_pago',
+    FechaContratacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FechaProximaRenovacion DATE,
     FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
-    FOREIGN KEY (PlanHostingID) REFERENCES Plan_Hosting(PlanHostingID) ON DELETE RESTRICT
-);"
+    FOREIGN KEY (PlanHostingID) REFERENCES Plan_Hosting(PlanHostingID)
+);
 
-mysql -u root -D "${DB_NAME}" -e "
 CREATE TABLE IF NOT EXISTS Factura (
-    ClienteID INT NOT NULL,
-    CuentaHostingID INT NOT NULL,
     FacturaID INT AUTO_INCREMENT PRIMARY KEY,
+    ClienteID INT NOT NULL,
+    SitioID INT NULL,
     Descripcion VARCHAR(255) NOT NULL,
-    FechaEmision DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FechaVencimiento DATETIME,
-    SaldoTotal DECIMAL(10, 2) NOT NULL,
-    Estado VARCHAR(10) NOT NULL DEFAULT 'pendiente' CHECK (Estado IN ('pagado', 'pendiente', 'vencida')),
-    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
-    FOREIGN KEY (CuentaHostingID) REFERENCES Cuenta_Hosting(CuentaHostingID) ON DELETE CASCADE
-);"
+    FechaEmision DATE NOT NULL,
+    FechaVencimiento DATE,
+    Monto DECIMAL(10, 2) NOT NULL,
+    Estado VARCHAR(20) NOT NULL DEFAULT 'pendiente',
+    MetodoPago VARCHAR(50) NULL,
+    TransaccionID VARCHAR(100) NULL,
+    FechaPago DATETIME NULL,
+    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE RESTRICT,
+    FOREIGN KEY (SitioID) REFERENCES SitioWeb(SitioID) ON DELETE SET NULL
+);
 
-mysql -u root -D "${DB_NAME}" -e "
 CREATE TABLE IF NOT EXISTS Ticket_Soporte (
     TicketID INT AUTO_INCREMENT PRIMARY KEY,
-    FechaCreacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    Asunto VARCHAR(100) NOT NULL,
-    Descripcion TEXT NOT NULL,
-    Estado VARCHAR(10) NOT NULL DEFAULT 'abierto' CHECK (Estado IN ('abierto', 'cerrado', 'pendiente')),
-    Prioridad VARCHAR(10) NOT NULL DEFAULT 'media' CHECK (Prioridad IN ('baja', 'media', 'alta', 'urgente')),
     ClienteID INT NOT NULL,
-    CuentaHostingID INT,
+    SitioID INT NULL,
+    FechaCreacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UltimaActualizacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    Asunto VARCHAR(150) NOT NULL,
+    Estado VARCHAR(20) NOT NULL DEFAULT 'abierto',
+    Prioridad VARCHAR(10) NOT NULL DEFAULT 'media',
     FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
-    FOREIGN KEY (CuentaHostingID) REFERENCES Cuenta_Hosting(CuentaHostingID) ON DELETE SET NULL
-);"
+    FOREIGN KEY (SitioID) REFERENCES SitioWeb(SitioID) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS Mensaje_Ticket (
+    MensajeID INT AUTO_INCREMENT PRIMARY KEY,
+    TicketID INT NOT NULL,
+    UsuarioID INT NULL,
+    EsAdmin BOOLEAN NOT NULL DEFAULT FALSE,
+    Contenido TEXT NOT NULL,
+    FechaEnvio DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (TicketID) REFERENCES Ticket_Soporte(TicketID) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS Log_Actividad (
+    LogID INT AUTO_INCREMENT PRIMARY KEY,
+    ClienteID INT NULL,
+    TipoActividad VARCHAR(50) NOT NULL,
+    Descripcion TEXT,
+    DireccionIP VARCHAR(45),
+    UserAgent VARCHAR(255),
+    FechaLog DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insertar el plan único si no existe
+INSERT IGNORE INTO Plan_Hosting (PlanHostingID, NombrePlan, Descripcion, Precio, Activo)
+VALUES ('developer_pro', 'Developer Pro Hosting', 'Nuestro plan todo incluido para desarrolladores y creativos.', 25.00, TRUE);
+EOF
 
 echo "Tablas creadas (si no existían)."
 
