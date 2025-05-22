@@ -182,6 +182,17 @@ else
     echo "EFS ya parece estar montado en ${EFS_MOUNT_POINT}."
 fi
 
+SFTP_EFS_BASE_PATH="/mnt/efs-clientes"
+echo "Creando directorio base para SFTP y sitios de clientes en ${SFTP_EFS_BASE_PATH}..."
+mkdir -p "${SFTP_EFS_BASE_PATH}"
+
+groupadd sftpusers || echo "Grupo sftpusers ya existe."
+
+chown root:101 "${SFTP_EFS_BASE_PATH}"
+chmod 775 "${SFTP_EFS_BASE_PATH}"
+
+echo "Permisos iniciales para ${SFTP_EFS_BASE_PATH} establecidos."
+
 echo "Creando directorio para archivos de la aplicación en ${PANEL_FILES_HOST_PATH}..."
 mkdir -p "${PANEL_FILES_HOST_PATH}"
 
@@ -487,12 +498,14 @@ Match Group sftpusers
     PasswordAuthentication no
 ' >> /etc/ssh/sshd_config
 fi
-sed -i 's|^Subsystem\s*sftp\s*.*|Subsystem sftp internal-sftp|' /etc/ssh/sshd_config
-if ! grep -q "Subsystem sftp internal-sftp" /etc/ssh/sshd_config; then
+
+
+if grep -q "^\s*Subsystem\s*sftp" /etc/ssh/sshd_config; then
+    sed -i 's|^\s*Subsystem\s*sftp\s*.*|Subsystem sftp internal-sftp|' /etc/ssh/sshd_config
+elif ! grep -q "Subsystem sftp internal-sftp" /etc/ssh/sshd_config; then
     echo 'Subsystem sftp internal-sftp' >> /etc/ssh/sshd_config
 fi
-systemctl reload sshd
-echo "Configuración SSHD para SFTP completada."
+
 
 echo "Configurando MariaDB..."
 systemctl start mariadb
@@ -620,12 +633,39 @@ CREATE TABLE IF NOT EXISTS Log_Actividad (
     FechaLog DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS SitioWeb (
+    SitioID INT AUTO_INCREMENT PRIMARY KEY,
+    ClienteID INT NOT NULL,
+    PlanHostingID VARCHAR(50) NOT NULL,
+    SubdominioElegido VARCHAR(63) NOT NULL,
+    DominioCompleto VARCHAR(255) NOT NULL UNIQUE,
+    EstadoServicio VARCHAR(30) NOT NULL DEFAULT 'pendiente_pago',
+    EstadoAprovisionamientoK8S VARCHAR(50) NOT NULL DEFAULT 'no_iniciado',
+    DirectorioEFSRuta VARCHAR(255) NULL,
+    FechaContratacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FechaProximaRenovacion DATE,
+    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
+    FOREIGN KEY (PlanHostingID) REFERENCES Plan_Hosting(PlanHostingID)
+);
+
+CREATE TABLE IF NOT EXISTS Tareas_Aprovisionamiento_K8S (
+    TareaID INT AUTO_INCREMENT PRIMARY KEY,
+    SitioID INT NOT NULL UNIQUE,
+    TipoTarea VARCHAR(50) NOT NULL DEFAULT 'aprovisionar_pod',
+    EstadoTarea VARCHAR(50) NOT NULL DEFAULT 'pendiente',
+    Intentos INT NOT NULL DEFAULT 0,
+    UltimoError TEXT NULL,
+    FechaSolicitud DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FechaActualizacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (SitioID) REFERENCES SitioWeb(SitioID) ON DELETE CASCADE
+);
+
 -- Insertar el plan único si no existe
 INSERT IGNORE INTO Plan_Hosting (PlanHostingID, NombrePlan, Descripcion, Precio, Activo)
 VALUES ('developer_pro', 'Developer Pro Hosting', 'Nuestro plan todo incluido para desarrolladores y creativos.', 25.00, TRUE);
 EOF
 
-echo "Tablas creadas (si no existían)."
+echo "Tablas creadas."
 
 echo "Creando usuario administrador..."
 ADMIN_EMAIL="admin@k8servers.es"
