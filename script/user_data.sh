@@ -325,10 +325,16 @@ spec:
           volumeMounts:
             - name: app-code-efs
               mountPath: "/var/www/html"
+            - name: efs-client-data
+              mountPath: "/mnt/efs-clientes"
       volumes:
         - name: app-code-efs
           persistentVolumeClaim:
             claimName: ${PANEL_PVC_NAME}
+        - name: efs-client-data
+          hostPath:
+            path: "/mnt/efs-clientes"
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
@@ -408,6 +414,8 @@ spec:
               subPath: default.conf
             - name: app-code-efs
               mountPath: "/var/www/html"
+            - name: efs-client-data
+              mountPath: "/mnt/efs-clientes"
       volumes:
         - name: nginx-vhost-volume
           configMap:
@@ -415,6 +423,10 @@ spec:
         - name: app-code-efs
           persistentVolumeClaim:
             claimName: ${PANEL_PVC_NAME}
+        - name: efs-client-data
+          hostPath:
+            path: "/mnt/efs-clientes"
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
@@ -439,7 +451,6 @@ metadata:
   labels:
     app: panel-web
   annotations:
-    #cert-manager.io/cluster-issuer: letsencrypt-prod
     cert-manager.io/cluster-issuer: letsencrypt-staging
 spec:
   ingressClassName: nginx
