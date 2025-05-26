@@ -484,6 +484,16 @@ subsets:
 EOT_K8S_RESOURCES
 echo "Manifiestos Kubernetes para el Panel Web aplicados."
 
+echo "Clonando el repositorio de worker_k8s_provisioning..."
+
+cd /tmp
+git clone https://dramlin1010:$GIT_TOKEN_TF@$GIT_HOST/dramlin1010/k8servers-worker.git
+
+cp k8servers-worker/worker_k8s_provisioning_real.sh /usr/local/bin/worker_k8s_provisioning_real.sh
+
+chmod +x /usr/local/bin/worker_k8s_provisioning_real.sh
+echo "Script clonado y permisos establecidos."
+
 echo "Configurando SSHD para SFTP..."
 SFTP_EFS_BASE_PATH="/mnt/efs-clientes"
 mkdir -p "${SFTP_EFS_BASE_PATH}"
@@ -548,6 +558,8 @@ echo "Base de Datos y Usuario creados/actualizados y privilegios concedidos."
 
 echo "Creando tablas en la base de datos '${DB_NAME}'..."
 
+echo "Creando tablas en la base de datos '${DB_NAME}'..."
+
 mysql -u root -D "${DB_NAME}" <<EOF
 CREATE TABLE IF NOT EXISTS Cliente (
     ClienteID INT AUTO_INCREMENT PRIMARY KEY,
@@ -578,8 +590,11 @@ CREATE TABLE IF NOT EXISTS SitioWeb (
     SubdominioElegido VARCHAR(63) NOT NULL,
     DominioCompleto VARCHAR(255) NOT NULL UNIQUE,
     EstadoServicio VARCHAR(30) NOT NULL DEFAULT 'pendiente_pago',
+    EstadoAprovisionamientoK8S VARCHAR(50) NOT NULL DEFAULT 'no_iniciado',
+    DirectorioEFSRuta VARCHAR(255) NULL,
     FechaContratacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FechaProximaRenovacion DATE,
+    FechaActualizacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
     FOREIGN KEY (PlanHostingID) REFERENCES Plan_Hosting(PlanHostingID)
 );
@@ -623,31 +638,6 @@ CREATE TABLE IF NOT EXISTS Mensaje_Ticket (
     FOREIGN KEY (TicketID) REFERENCES Ticket_Soporte(TicketID) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS Log_Actividad (
-    LogID INT AUTO_INCREMENT PRIMARY KEY,
-    ClienteID INT NULL,
-    TipoActividad VARCHAR(50) NOT NULL,
-    Descripcion TEXT,
-    DireccionIP VARCHAR(45),
-    UserAgent VARCHAR(255),
-    FechaLog DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS SitioWeb (
-    SitioID INT AUTO_INCREMENT PRIMARY KEY,
-    ClienteID INT NOT NULL,
-    PlanHostingID VARCHAR(50) NOT NULL,
-    SubdominioElegido VARCHAR(63) NOT NULL,
-    DominioCompleto VARCHAR(255) NOT NULL UNIQUE,
-    EstadoServicio VARCHAR(30) NOT NULL DEFAULT 'pendiente_pago',
-    EstadoAprovisionamientoK8S VARCHAR(50) NOT NULL DEFAULT 'no_iniciado',
-    DirectorioEFSRuta VARCHAR(255) NULL,
-    FechaContratacion DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FechaProximaRenovacion DATE,
-    FOREIGN KEY (ClienteID) REFERENCES Cliente(ClienteID) ON DELETE CASCADE,
-    FOREIGN KEY (PlanHostingID) REFERENCES Plan_Hosting(PlanHostingID)
-);
-
 CREATE TABLE IF NOT EXISTS Tareas_Aprovisionamiento_K8S (
     TareaID INT AUTO_INCREMENT PRIMARY KEY,
     SitioID INT NOT NULL UNIQUE,
@@ -660,7 +650,16 @@ CREATE TABLE IF NOT EXISTS Tareas_Aprovisionamiento_K8S (
     FOREIGN KEY (SitioID) REFERENCES SitioWeb(SitioID) ON DELETE CASCADE
 );
 
--- Insertar el plan único si no existe
+CREATE TABLE IF NOT EXISTS Log_Actividad (
+    LogID INT AUTO_INCREMENT PRIMARY KEY,
+    ClienteID INT NULL,
+    TipoActividad VARCHAR(50) NOT NULL,
+    Descripcion TEXT,
+    DireccionIP VARCHAR(45),
+    UserAgent VARCHAR(255),
+    FechaLog DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 INSERT IGNORE INTO Plan_Hosting (PlanHostingID, NombrePlan, Descripcion, Precio, Activo)
 VALUES ('developer_pro', 'Developer Pro Hosting', 'Nuestro plan todo incluido para desarrolladores y creativos.', 25.00, TRUE);
 EOF
