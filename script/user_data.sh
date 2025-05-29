@@ -10,6 +10,63 @@ while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock 
 done
 apt-get upgrade -y
 
+echo "--- Instalando AWS CLI v2 ---"
+echo "Instalando dependencias para AWS CLI (unzip y curl)..."
+apt-get install -y unzip curl
+
+echo "Descargando e instalando AWS CLI v2..."
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+cd /tmp
+echo "Descomprimiendo awscliv2.zip en /tmp..."
+unzip -o awscliv2.zip
+echo "Ejecutando instalador de AWS CLI desde /tmp/aws..."
+if sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update; then
+    echo "Instalador de AWS CLI ejecutado."
+else
+    echo "ERROR: El instalador de AWS CLI falló."
+    exit 1
+fi
+cd /
+echo "Limpiando archivos temporales de AWS CLI de /tmp..."
+rm -rf /tmp/awscliv2.zip /tmp/aws
+echo "AWS CLI v2 instalación completada."
+
+echo "Verificando AWS CLI y estableciendo AWS_CLI_PATH..."
+echo "PATH actual: $PATH"
+AWS_CLI_PATH=""
+if command -v aws &> /dev/null; then
+    echo "Comando 'aws' encontrado en el PATH."
+    AWS_CLI_PATH="aws"
+elif [ -f /usr/local/bin/aws ]; then
+    echo "/usr/local/bin/aws existe. Usando ruta completa."
+    AWS_CLI_PATH="/usr/local/bin/aws"
+else
+    echo "ERROR CRÍTICO: Comando 'aws' NO encontrado después de la instalación."
+    exit 1
+fi
+echo "AWS CLI Path a usar: $AWS_CLI_PATH"
+$AWS_CLI_PATH --version
+echo "--- Fin de la instalación y verificación de AWS CLI ---"
+
+echo "Configurando credenciales AWS CLI para root (si se proporcionan TF_VARs)..."
+if [ -n "${TF_VAR_aws_access_key_id}" ] && [ -n "${TF_VAR_aws_secret_access_key}" ]; then
+    mkdir -p /root/.aws
+    cat <<-EOT_CREDS > /root/.aws/credentials
+[default]
+aws_access_key_id=${TF_VAR_aws_access_key_id}
+aws_secret_access_key=${TF_VAR_aws_secret_access_key}
+$( [ -n "${TF_VAR_aws_session_token}" ] && echo "aws_session_token=${TF_VAR_aws_session_token}" )
+EOT_CREDS
+    cat <<-CREDENTIALS_CONFIG > /root/.aws/config
+[default]
+region = ${TF_VAR_aws_region}
+CREDENTIALS_CONFIG
+    chmod 600 /root/.aws/credentials /root/.aws/config
+    echo "Credenciales AWS CLI configuradas desde TF_VARs."
+else
+    echo "No se proporcionaron TF_VARs para credenciales AWS, se asumirá Rol de Instancia IAM si es necesario."
+fi
+
 NODE_PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
 if [ -z "$NODE_PRIVATE_IP" ]; then
     echo "ERROR CRÍTICO: No se pudo obtener la IP privada del nodo desde los metadatos."
@@ -17,12 +74,74 @@ if [ -z "$NODE_PRIVATE_IP" ]; then
 fi
 echo "IP Privada del Nodo: $NODE_PRIVATE_IP"
 
-apt-get install -y curl wget git unzip jq apt-transport-https ca-certificates gnupg lsb-release mariadb-server nfs-common php-cli php-mysql
+apt-get install -y wget git jq apt-transport-https ca-certificates gnupg lsb-release mariadb-server nfs-common php-cli php-mysql
 
-# Hacer accesible mariadb desde cualquier IP
+echo "--- Instalando MongoDB ---"
+apt-get install -y gnupg
+curl -fsSL https://pgp.mongodb.com/server-6.0.asc | \
+   gpg -o /usr/share/keyrings/mongodb-server-6.0.gpg \
+   --dearmor
 
+UBUNTU_CODENAME=$(lsb_release -cs)
+MONGO_REPO_FILE="/etc/apt/sources.list.d/mongodb-org-6.0.list"
+
+if [ "$UBUNTU_CODENAME" == "jammy" ]; then
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee $MONGO_REPO_FILE
+elif [ "$UBUNTU_CODENAME" == "focal" ]; then
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" | tee $MONGO_REPO_FILE
+else
+    echo "ADVERTENCIA: Versión de Ubuntu no reconocida automáticamente para el repositorio de MongoDB. Usando Jammy por defecto. Verifica $MONGO_REPO_FILE."
+    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee $MONGO_REPO_FILE
+fi
+
+apt-get update -y
+
+echo "Instalando paquetes de MongoDB..."
+apt-get install -y mongodb-org
+
+if [ -f /etc/mongod.conf ]; then
+    sed -i -E 's/^\s*bindIp:/#bindIp:/' /etc/mongod.conf
+    if grep -q "^\s*net:" /etc/mongod.conf; then
+        if ! grep -Pzo "^\s*net:\n\s*bindIp: ${NODE_PRIVATE_IP}" /etc/mongod.conf; then
+             sed -i "/^\s*net:/,/^\s*[^ ]/ s/^\s*bindIp:.*/ /" /etc/mongod.conf
+             sed -i "/^\s*net:/a \ \ bindIp: ${NODE_PRIVATE_IP}" /etc/mongod.conf
+        fi
+    else
+        echo "ADVERTENCIA: Sección 'net:' no encontrada en mongod.conf. Añadiéndola."
+        echo -e "\nnet:\n  bindIp: ${NODE_PRIVATE_IP}\n  port: 27017" >> /etc/mongod.conf
+    fi
+    echo "MongoDB configurado para escuchar en ${NODE_PRIVATE_IP}"
+else
+    echo "ERROR: No se encontró /etc/mongod.conf. MongoDB podría no escuchar externamente."
+fi
+
+echo "Iniciando y habilitando MongoDB..."
+systemctl restart mongod
+systemctl enable mongod
+if systemctl is-active --quiet mongod; then
+    echo "MongoDB iniciado correctamente."
+else
+    echo "ERROR: MongoDB falló al iniciar. Revisa 'journalctl -u mongod'."
+    exit 1
+fi
+systemctl enable mongod
+
+echo "Esperando a que MongoDB esté listo..."
+for i in {1..20}; do
+  if ss -tulnp | grep -q ':27017.*mongod'; then
+    echo "MongoDB parece estar escuchando en el puerto 27017."
+    break
+  fi
+  echo "Esperando a MongoDB... intento $i"
+  sleep 3
+done
+if ! ss -tulnp | grep -q ':27017.*mongod'; then
+  echo "ADVERTENCIA: MongoDB podría no estar listo después de 60 segundos. Revisa 'journalctl -u mongod'."
+fi
+echo "--- MongoDB instalado y configurado (básico) ---"
+
+echo "--- Instalando y configurando MariaDB ---"
 MARIADB_CONFIG_FILE="/etc/mysql/mariadb.conf.d/50-server.cnf"
-
 if [ -f "$MARIADB_CONFIG_FILE" ]; then
     echo "Configurando MariaDB para escuchar en todas las interfaces (0.0.0.0)..."
     sed -i -E 's/^\s*bind-address\s*=\s*127\.0\.0\.1/#bind-address = 127.0.0.1/' "$MARIADB_CONFIG_FILE"
@@ -32,37 +151,45 @@ if [ -f "$MARIADB_CONFIG_FILE" ]; then
         elif grep -q "\[mariadb\]" "$MARIADB_CONFIG_FILE"; then
             sed -i '/\[mariadb\]/a bind-address = 0.0.0.0' "$MARIADB_CONFIG_FILE"
         else
-            echo "ADVERTENCIA: No se encontró la sección [mysqld] o [mariadb] para añadir bind-address = 0.0.0.0. MariaDB podría no escuchar externamente."
+            echo "ADVERTENCIA: No se encontró la sección [mysqld] o [mariadb] para añadir bind-address = 0.0.0.0."
         fi
     fi
     echo "bind-address configurado."
 else
-    echo "ADVERTENCIA: No se encontró el fichero de configuración de MariaDB en $MARIADB_CONFIG_FILE. El bind-address podría no estar configurado para acceso externo."
+    echo "ADVERTENCIA: No se encontró el fichero de configuración de MariaDB en $MARIADB_CONFIG_FILE."
 fi
 
 systemctl restart mariadb
 
-apt-get install -y unzip
-curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-unzip awscliv2.zip
-./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update
-rm -rf awscliv2.zip aws
+echo "--- Descargando e instalando amazon-efs-utils desde .deb precompilado ---"
+EFS_UTILS_DEB_S3_URI="s3://efsyamontado/amazon-efs-utils-2.3.0-1_amd64.deb"
+LOCAL_DEB_PATH="/tmp/amazon-efs-utils.deb"
 
-echo "Instalando dependencias para amazon-efs-utils y Rust..."
-apt-get install -y git binutils build-essential pkg-config libssl-dev
-echo "Instalando Rust..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-source /root/.cargo/env
-echo "Rust instalado."
-echo "Instalando amazon-efs-utils desde GitHub..."
-mkdir -p /opt/installers && cd /opt/installers && rm -rf ./efs-utils
-git clone https://github.com/aws/efs-utils.git ./efs-utils && cd ./efs-utils
-echo "Compilando amazon-efs-utils..."
-PATH="/root/.cargo/bin:$PATH" ./build-deb.sh
-echo "Instalando paquete .deb de amazon-efs-utils..."
-apt-get -y install ./build/amazon-efs-utils*deb
-cd / && rm -rf /opt/installers/efs-utils
-echo "amazon-efs-utils instalado."
+echo "Descargando $EFS_UTILS_DEB_S3_URI a $LOCAL_DEB_PATH usando $AWS_CLI_PATH..."
+if $AWS_CLI_PATH s3 cp "$EFS_UTILS_DEB_S3_URI" "$LOCAL_DEB_PATH"; then
+    echo "Descarga de $LOCAL_DEB_PATH exitosa."
+    echo "Instalando dependencias de runtime para efs-utils (ej. stunnel)..."
+    apt-get update -y
+    apt-get install -y stunnel
+    echo "Instalando $LOCAL_DEB_PATH..."
+    if dpkg -i "$LOCAL_DEB_PATH"; then
+        echo "amazon-efs-utils instalado exitosamente desde $LOCAL_DEB_PATH."
+    else
+        echo "ADVERTENCIA: Falló la instalación de $LOCAL_DEB_PATH con dpkg. Intentando arreglar dependencias..."
+        if apt-get -f install -y; then
+            echo "Dependencias arregladas e instalación de efs-utils posiblemente completada."
+        else
+            echo "ERROR: No se pudieron arreglar las dependencias después de intentar instalar efs-utils."
+        fi
+    fi
+    echo "Limpiando $LOCAL_DEB_PATH..."
+    rm "$LOCAL_DEB_PATH"
+else
+    echo "ERROR CRÍTICO: No se pudo descargar $EFS_UTILS_DEB_S3_URI."
+    echo "Verifica la URI del bucket, el nombre del archivo y los permisos IAM de la instancia EC2 (o credenciales configuradas)."
+    exit 1
+fi
+echo "--- amazon-efs-utils debería estar instalado ---"
 
 echo "Instalando K3s..."
 curl -sfL https://get.k3s.io | \
@@ -234,20 +361,6 @@ NGINX_IMAGE_NAME="nginx:alpine"
 PANEL_INGRESS_NAME="panel-web-ing"
 PANEL_TLS_SECRET_NAME="panel-web-tls"
 
-echo "Configurando credenciales AWS CLI para root..."
-mkdir -p /root/.aws
-cat <<-EOT_CREDS > /root/.aws/credentials
-[default]
-aws_access_key_id=${TF_VAR_aws_access_key_id}
-aws_secret_access_key=${TF_VAR_aws_secret_access_key}
-aws_session_token=${TF_VAR_aws_session_token}
-EOT_CREDS
-cat <<-CREDENTIALS_CONFIG > /root/.aws/config
-[default]
-region = ${TF_VAR_aws_region}
-CREDENTIALS_CONFIG
-chmod 600 /root/.aws/credentials /root/.aws/config
-echo "Credenciales AWS CLI configuradas."
 
 echo "Creando el secret aws-ecr-creds para ECR..."
 kubectl create secret docker-registry aws-ecr-creds \
@@ -492,6 +605,29 @@ subsets:
     ports:
       - port: 3306
         protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-host-svc
+  namespace: default
+spec:
+  ports:
+  - protocol: TCP
+    port: 27017
+    targetPort: 27017
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: mongodb-host-svc
+  namespace: default
+subsets:
+  - addresses:
+      - ip: ${NODE_PRIVATE_IP} # La IP privada del nodo donde corre MongoDB
+    ports:
+      - port: 27017
+        protocol: TCP
 EOT_K8S_RESOURCES
 echo "Manifiestos Kubernetes para el Panel Web aplicados."
 
@@ -504,6 +640,43 @@ cp k8servers-worker/worker_k8s_provisioning_real.sh /usr/local/bin/worker_k8s_pr
 
 chmod +x /usr/local/bin/worker_k8s_provisioning_real.sh
 echo "Script clonado y permisos establecidos."
+
+echo "Creando archivo de unidad systemd para k8servers-worker..."
+cat << EOF_SYSTEMD_SERVICE > /etc/systemd/system/k8servers-worker.service
+[Unit]
+Description=K8Servers Kubernetes Provisioning Worker
+After=network.target k3s.service mariadb.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/worker_k8s_provisioning_real.sh
+Restart=on-failure
+RestartSec=10s
+User=root
+Group=root
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.cargo/bin:/usr/local/aws-cli/v2/current/bin"
+Environment="KUBECONFIG=/root/.kube/config"
+Environment="ROUTE53_HOSTED_ZONE_ID=Z0886365O8WRCIVR5DW"
+
+StandardOutput=append:/var/log/k8s_provisioning_worker_service.log
+StandardError=append:/var/log/k8s_provisioning_worker_service.err.log
+
+[Install]
+WantedBy=multi-user.target
+EOF_SYSTEMD_SERVICE
+
+echo "Recargando systemd, habilitando e iniciando k8servers-worker service..."
+systemctl daemon-reload
+systemctl enable k8servers-worker.service
+systemctl start k8servers-worker.service
+
+if systemctl is-active --quiet k8servers-worker.service; then
+    echo "Servicio k8servers-worker iniciado y activo."
+else
+    echo "ERROR: El servicio k8servers-worker falló al iniciar. Revisa 'journalctl -u k8servers-worker.service'."
+    exit 1
+fi
 
 echo "Configurando SSHD para SFTP..."
 SFTP_EFS_BASE_PATH="/mnt/efs-clientes"

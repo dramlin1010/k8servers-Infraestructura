@@ -35,6 +35,14 @@ resource "aws_security_group" "k3s_node_sg" {
     description = "Allow NFS for EFS from self"
   }
 
+  ingress {
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
+    self        = true
+    description = "Allow MongoDB from self"
+  }
+
   # Trafico saliente
   egress {
     from_port   = 0
