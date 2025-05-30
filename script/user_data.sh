@@ -76,70 +76,6 @@ echo "IP Privada del Nodo: $NODE_PRIVATE_IP"
 
 apt-get install -y wget git jq apt-transport-https ca-certificates gnupg lsb-release mariadb-server nfs-common php-cli php-mysql
 
-echo "--- Instalando MongoDB ---"
-apt-get install -y gnupg
-curl -fsSL https://pgp.mongodb.com/server-6.0.asc | \
-   gpg -o /usr/share/keyrings/mongodb-server-6.0.gpg \
-   --dearmor
-
-UBUNTU_CODENAME=$(lsb_release -cs)
-MONGO_REPO_FILE="/etc/apt/sources.list.d/mongodb-org-6.0.list"
-
-if [ "$UBUNTU_CODENAME" == "jammy" ]; then
-    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee $MONGO_REPO_FILE
-elif [ "$UBUNTU_CODENAME" == "focal" ]; then
-    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu focal/mongodb-org/6.0 multiverse" | tee $MONGO_REPO_FILE
-else
-    echo "ADVERTENCIA: Versión de Ubuntu no reconocida automáticamente para el repositorio de MongoDB. Usando Jammy por defecto. Verifica $MONGO_REPO_FILE."
-    echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-6.0.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee $MONGO_REPO_FILE
-fi
-
-apt-get update -y
-
-echo "Instalando paquetes de MongoDB..."
-apt-get install -y mongodb-org
-
-if [ -f /etc/mongod.conf ]; then
-    sed -i -E 's/^\s*bindIp:/#bindIp:/' /etc/mongod.conf
-    if grep -q "^\s*net:" /etc/mongod.conf; then
-        if ! grep -Pzo "^\s*net:\n\s*bindIp: ${NODE_PRIVATE_IP}" /etc/mongod.conf; then
-             sed -i "/^\s*net:/,/^\s*[^ ]/ s/^\s*bindIp:.*/ /" /etc/mongod.conf
-             sed -i "/^\s*net:/a \ \ bindIp: ${NODE_PRIVATE_IP}" /etc/mongod.conf
-        fi
-    else
-        echo "ADVERTENCIA: Sección 'net:' no encontrada en mongod.conf. Añadiéndola."
-        echo -e "\nnet:\n  bindIp: ${NODE_PRIVATE_IP}\n  port: 27017" >> /etc/mongod.conf
-    fi
-    echo "MongoDB configurado para escuchar en ${NODE_PRIVATE_IP}"
-else
-    echo "ERROR: No se encontró /etc/mongod.conf. MongoDB podría no escuchar externamente."
-fi
-
-echo "Iniciando y habilitando MongoDB..."
-systemctl restart mongod
-systemctl enable mongod
-if systemctl is-active --quiet mongod; then
-    echo "MongoDB iniciado correctamente."
-else
-    echo "ERROR: MongoDB falló al iniciar. Revisa 'journalctl -u mongod'."
-    exit 1
-fi
-systemctl enable mongod
-
-echo "Esperando a que MongoDB esté listo..."
-for i in {1..20}; do
-  if ss -tulnp | grep -q ':27017.*mongod'; then
-    echo "MongoDB parece estar escuchando en el puerto 27017."
-    break
-  fi
-  echo "Esperando a MongoDB... intento $i"
-  sleep 3
-done
-if ! ss -tulnp | grep -q ':27017.*mongod'; then
-  echo "ADVERTENCIA: MongoDB podría no estar listo después de 60 segundos. Revisa 'journalctl -u mongod'."
-fi
-echo "--- MongoDB instalado y configurado (básico) ---"
-
 echo "--- Instalando y configurando MariaDB ---"
 MARIADB_CONFIG_FILE="/etc/mysql/mariadb.conf.d/50-server.cnf"
 if [ -f "$MARIADB_CONFIG_FILE" ]; then
@@ -604,29 +540,6 @@ subsets:
       - ip: ${NODE_PRIVATE_IP}
     ports:
       - port: 3306
-        protocol: TCP
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: mongodb-host-svc
-  namespace: default
-spec:
-  ports:
-  - protocol: TCP
-    port: 27017
-    targetPort: 27017
----
-apiVersion: v1
-kind: Endpoints
-metadata:
-  name: mongodb-host-svc
-  namespace: default
-subsets:
-  - addresses:
-      - ip: ${NODE_PRIVATE_IP} # La IP privada del nodo donde corre MongoDB
-    ports:
-      - port: 27017
         protocol: TCP
 EOT_K8S_RESOURCES
 echo "Manifiestos Kubernetes para el Panel Web aplicados."
