@@ -64,7 +64,7 @@ CREDENTIALS_CONFIG
     chmod 600 /root/.aws/credentials /root/.aws/config
     echo "Credenciales AWS CLI configuradas desde TF_VARs."
 else
-    echo "No se proporcionaron TF_VARs para credenciales AWS, se asumirá Rol de Instancia IAM si es necesario."
+    echo "No se proporcionaron TF_VARs para credenciales AWS."
 fi
 
 NODE_PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
@@ -412,6 +412,12 @@ data:
         server_name _;
         root /var/www/html;
         index index.php index.html;
+
+        set_real_ip_from 10.42.0.0/16;    # Rango de IPs de Pods de K3s (por defecto)
+        set_real_ip_from 10.43.0.0/16;    # Rango de IPs de Servicios de K3s (por defecto)
+        set_real_ip_from 127.0.0.1;       # Loopback
+
+        real_ip_header X-Real-IP;
 
         location / {
             try_files \$uri \$uri/ /index.php?\$query_string;
