@@ -98,3 +98,9 @@ variable "git_commit_user_email" {
   type        = string
   default     = "dramlin1010@g.educaand.es"
 }
+
+variable "s3_backup_bucket_name" {
+  description = "S3 para backups importantes."
+  type        = string
+  default     = ""
+}

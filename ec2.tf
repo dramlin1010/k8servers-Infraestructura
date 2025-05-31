@@ -50,6 +50,7 @@ export TF_VAR_aws_access_key_id="${var.aws_access_key_id}"
 export TF_VAR_aws_secret_access_key="${var.aws_secret_access_key}"
 export TF_VAR_aws_session_token="${var.aws_session_token}"
 export TF_VAR_aws_region="${var.aws_region}"
+export TF_VAR_s3_backup_bucket_name="${var.s3_backup_bucket_name}"
 
 "$${DECOMPRESSED_SCRIPT_PATH}"
 

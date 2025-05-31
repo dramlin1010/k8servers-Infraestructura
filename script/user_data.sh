@@ -781,4 +781,106 @@ ON DUPLICATE KEY UPDATE Nombre='Admin', Apellidos='K8Servers', Passwd='${ADMIN_P
 "
 echo "Usuario administrador 'admin@k8servers.es' creado/actualizado."
 
+echo "--- Configurando Backups Automáticos a S3 ---"
+
+S3_BACKUP_BUCKET_NAME_VAR="${TF_VAR_s3_backup_bucket_name}"
+AWS_REGION_VAR="${TF_VAR_aws_region}"
+AWS_CLI_EXECUTABLE="${AWS_CLI_PATH}"
+DB_NAME_TO_BACKUP="${DB_NAME}"
+DB_USER_FOR_BACKUP="${DB_USER}"
+DB_PASSWORD_FOR_BACKUP="${DB_PASSWORD}"
+APP_FILES_PATH_FOR_BACKUP="${PANEL_FILES_HOST_PATH}"
+JSON_LOG_FILE_NAME="login_activity.json"
+
+cat << EOF_BACKUP_SCRIPT > /usr/local/bin/backup_to_s3.sh
+#!/bin/bash
+set -e
+
+S3_BUCKET_NAME="\${1}"
+CURRENT_AWS_REGION="\${2}"
+CLI_PATH="\${3}"
+DATABASE_NAME="\${4}"
+DATABASE_USER="\${5}"
+DATABASE_PASSWORD="\${6}"
+APPLICATION_FILES_PATH="\${7}"
+JSON_FILE_NAME_TO_BACKUP="\${8}"
+
+BACKUP_DIR="/tmp/s3_app_backups"
+TIMESTAMP=\$(date +"%Y-%m-%d_%H-%M-%S")
+JSON_FULL_PATH="\$APPLICATION_FILES_PATH/\$JSON_FILE_NAME_TO_BACKUP"
+
+mkdir -p "\$BACKUP_DIR"
+
+echo "Verificando/Creando bucket S3: \$S3_BUCKET_NAME en región \$CURRENT_AWS_REGION"
+if ! \$CLI_PATH s3api head-bucket --bucket "\$S3_BUCKET_NAME" --region "\$CURRENT_AWS_REGION" 2>/dev/null; then
+    echo "Bucket \$S3_BUCKET_NAME no existe o no es accesible. Intentando crear..."
+    if [[ "\$CURRENT_AWS_REGION" == "us-east-1" ]]; then
+        if \$CLI_PATH s3api create-bucket --bucket "\$S3_BUCKET_NAME" --region "\$CURRENT_AWS_REGION"; then
+            echo "Bucket \$S3_BUCKET_NAME creado en us-east-1."
+        else
+            echo "ERROR: No se pudo crear el bucket \$S3_BUCKET_NAME en us-east-1."
+            exit 1
+        fi
+    else
+        if \$CLI_PATH s3api create-bucket --bucket "\$S3_BUCKET_NAME" --region "\$CURRENT_AWS_REGION" --create-bucket-configuration LocationConstraint="\$CURRENT_AWS_REGION"; then
+            echo "Bucket \$S3_BUCKET_NAME creado en \$CURRENT_AWS_REGION."
+        else
+            echo "ERROR: No se pudo crear el bucket \$S3_BUCKET_NAME en \$CURRENT_AWS_REGION."
+            exit 1
+        fi
+    fi
+else
+    echo "Bucket \$S3_BUCKET_NAME ya existe."
+fi
+
+DB_BACKUP_FILE="\$BACKUP_DIR/db_backup_\${DATABASE_NAME}_\${TIMESTAMP}.sql.gz"
+echo "Creando backup de la base de datos \$DATABASE_NAME en \$DB_BACKUP_FILE..."
+mysqldump -u "\$DATABASE_USER" -p"\$DATABASE_PASSWORD" --single-transaction --routines --triggers "\$DATABASE_NAME" | gzip > "\$DB_BACKUP_FILE"
+echo "Subiendo backup de base de datos a s3://\$S3_BUCKET_NAME/database_backups/"
+\$CLI_PATH s3 cp "\$DB_BACKUP_FILE" "s3://\$S3_BUCKET_NAME/database_backups/"
+
+if [ -f "\$JSON_FULL_PATH" ]; then
+    JSON_BACKUP_FILE_LOCAL="\$BACKUP_DIR/json_log_backup_\${TIMESTAMP}.json"
+    echo "Copiando archivo JSON \$JSON_FULL_PATH a \$JSON_BACKUP_FILE_LOCAL para backup..."
+    cp "\$JSON_FULL_PATH" "\$JSON_BACKUP_FILE_LOCAL"
+        S3_JSON_TARGET_PATH="s3://\$S3_BUCKET_NAME/json_log_backups/json_log_backup_\${TIMESTAMP}.json"
+    echo "Subiendo backup JSON a \$S3_JSON_TARGET_PATH"
+    \$CLI_PATH s3 cp "\$JSON_BACKUP_FILE_LOCAL" "\$S3_JSON_TARGET_PATH"
+else
+    echo "Archivo JSON \$JSON_FULL_PATH no encontrado. Omitiendo backup."
+fi
+echo "Limpiando directorio de backups temporales: \$BACKUP_DIR"
+rm -rf "\$BACKUP_DIR"
+echo "Backup a S3 completado."
+EOF_BACKUP_SCRIPT
+
+chmod +x /usr/local/bin/backup_to_s3.sh
+
+CRON_FILE_S3_BACKUP="/etc/cron.d/app_s3_backups"
+CRON_SCHEDULE_S3_BACKUP="15 3 * * *"
+
+CRON_PATH_LINE="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/aws-cli/v2/current/bin"
+if [ -n "${AWS_CLI_EXECUTABLE}" ] && [ "${AWS_CLI_EXECUTABLE}" != "aws" ] && [ -d "\$(dirname ${AWS_CLI_EXECUTABLE})" ]; then
+    CRON_PATH_LINE="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$(dirname ${AWS_CLI_EXECUTABLE}):/usr/local/aws-cli/v2/current/bin"
+fi
+
+echo "Creando cron job para backups a S3 en $CRON_FILE_S3_BACKUP..."
+cat << EOF_CRON_JOB > "$CRON_FILE_S3_BACKUP"
+SHELL=/bin/bash
+${CRON_PATH_LINE}
+
+${CRON_SCHEDULE_S3_BACKUP} root /usr/local/bin/backup_to_s3.sh "${S3_BACKUP_BUCKET_NAME_VAR}" "${AWS_REGION_VAR}" "${AWS_CLI_EXECUTABLE}" "${DB_NAME_TO_BACKUP}" "${DB_USER_FOR_BACKUP}" "${DB_PASSWORD_FOR_BACKUP}" "${APP_FILES_PATH_FOR_BACKUP}" "${JSON_LOG_FILE_NAME}" >> /var/log/app_s3_backup.log 2>&1
+EOF_CRON_JOB
+
+chmod 0644 "$CRON_FILE_S3_BACKUP"
+
+if systemctl list-unit-files | grep -qw cron.service; then
+    systemctl restart cron
+elif systemctl list-unit-files | grep -qw crond.service; then
+    systemctl restart crond
+else
+    echo "ADVERTENCIA: No se pudo reiniciar el servicio cron (cron o crond no encontrado)."
+fi
+
+echo "--- Configuración de Backups Automáticos a S3 Finalizada ---"
 echo "--- User Data Script Finalizado ---"
