@@ -45,5 +45,5 @@ jobs:
       - name: Inicializar Terraform
         run: terraform init
 
-      - name: Aplicar cambios de Terraform
-        run: terraform apply -auto-approve
+      - name: Plan de Terraform
+        run: terraform plan
