@@ -41,6 +41,11 @@ jobs:
         with:
           terraform_version: "1.4.0"
 
+      - name: Instalar dos2unix
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y dos2unix
+
       - name: Dos2Unix Fix Batch
         run: dos2unix script/user_data.sh
 
