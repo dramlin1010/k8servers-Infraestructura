@@ -46,8 +46,12 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y dos2unix
 
-      - name: Dos2Unix Fix Batch
-        run: dos2unix script/user_data.sh
+      - name: Corregir finales de línea y preparar payload de User Data
+        run: |
+          dos2unix script/user_data.sh
+          gzip -c script/user_data.sh > script/user_data.sh.gz
+          base64 script/user_data.sh.gz > script/user_data.sh.gz.b64
+          echo "Payload script/user_data.sh.gz.b64 generado."
 
       - name: Inicializar Terraform
         run: terraform init
