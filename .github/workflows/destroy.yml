@@ -48,6 +48,13 @@ jobs:
         with:
           terraform_version: "1.4.0"
 
+      - name: Descargar el tfstate de S3
+        run: aws s3 cp s3://${{ secrets.AWS_S3_BUCKET_TFSTATE }}/terraform.tfstate terraform.tfstate
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: 'us-east-1'
+
       - name: Inicializar Terraform
         run: terraform init
 
