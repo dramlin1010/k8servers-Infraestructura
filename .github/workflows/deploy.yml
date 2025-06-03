@@ -17,6 +17,7 @@ jobs:
           aws_secret_access_key = "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
           aws_session_token     = "${{ secrets.AWS_SESSION_TOKEN }}"
           aws_region            = "${{ secrets.AWS_REGION }}"
+          aws_email             = "${{ secrets.AWS_EMAIL }}"
           admin_email           = "${{ secrets.ADMIN_EMAIL }}"
           base_domain           = "${{ secrets.BASE_DOMAIN }}"
           git_pat               = "${{ secrets.GIT_PAT }}"
