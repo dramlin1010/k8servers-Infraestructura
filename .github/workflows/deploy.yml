@@ -44,5 +44,20 @@ jobs:
       - name: Inicializar Terraform
         run: terraform init
 
-      - name: Plan de Terraform
-        run: terraform plan
+      - name: Apply de Terraform
+        run: terraform apply -auto-approve
+
+      - name: Upload Terraform State as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Terraform State
+          path: terraform.tfstate
+
+      - name: Subir archivo tfstate a S3
+        uses: a-sync/s3-uploader@master
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: 'us-east-1'
+          S3_BUCKET: ${{ secrets.AWS_S3_BUCKET_TFSTATE }}
+          FILE: terraform.tfstate
