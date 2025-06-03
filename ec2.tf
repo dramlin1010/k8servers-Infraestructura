@@ -19,6 +19,9 @@ resource "aws_instance" "k3s_node" {
   vpc_security_group_ids = [aws_security_group.k3s_node_sg.id]
   key_name               = var.key_name
   #iam_instance_profile   = aws_iam_instance_profile.ec2_profile.name
+  depends_on = [
+    aws_efs_mount_target.panel_web_efs_mt_public
+  ]
 
   user_data = <<-EOF
 #!/bin/bash
