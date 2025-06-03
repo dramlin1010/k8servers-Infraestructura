@@ -1,0 +1,55 @@
+name: Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_destroy:
+        description: "Escribe 'yes' para confirmar la destruccion"
+        required: true
+        default: "no"
+
+jobs:
+  terraform-destroy:
+    if: ${{ github.event.inputs.confirm_destroy == 'yes' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v3
+
+      - name: Crear archivo terraform.tfvars
+        run: |
+          cat <<EOF > terraform.tfvars
+          aws_access_key_id     = "${{ secrets.AWS_ACCESS_KEY_ID }}"
+          aws_secret_access_key = "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+          aws_session_token     = "${{ secrets.AWS_SESSION_TOKEN }}"
+          aws_region            = "${{ secrets.AWS_REGION }}"
+          aws_email             = "${{ secrets.AWS_EMAIL }}"
+          hosted_zone_id        = "${{ secrets.HOSTED_ZONE_ID }}"
+          admin_email           = "${{ secrets.ADMIN_EMAIL }}"
+          base_domain           = "${{ secrets.BASE_DOMAIN }}"
+          git_pat               = "${{ secrets.GIT_PAT }}"
+          git_clone_username    = "${{ secrets.GIT_CLONE_USERNAME }}"
+          s3_backup_bucket_name = "${{ secrets.S3_BACKUP_BUCKET_NAME }}"
+          instance_type         = "${{ secrets.INSTANCE_TYPE }}"
+          key_name              = "${{ secrets.KEY_NAME }}"
+          project_name          = "${{ secrets.PROJECT_NAME }}"
+          EOF
+
+      - name: AWS Creds
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: us-east-1
+
+      - name: Configurar Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: "1.4.0"
+
+      - name: Inicializar Terraform
+        run: terraform init
+
+      - name: Aplicar cambios de Terraform
+        run: terraform destroy -auto-approve
