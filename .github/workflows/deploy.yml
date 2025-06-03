@@ -41,6 +41,9 @@ jobs:
         with:
           terraform_version: "1.4.0"
 
+      - name: Dos2Unix Fix Batch
+        run: dos2unix script/user_data.sh
+
       - name: Inicializar Terraform
         run: terraform init
 
