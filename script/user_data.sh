@@ -351,7 +351,7 @@ metadata:
   labels:
     app: php-fpm-app
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: php-fpm-app
@@ -445,7 +445,7 @@ metadata:
   labels:
     app: nginx-app
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: nginx-app
