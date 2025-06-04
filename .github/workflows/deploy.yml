@@ -24,7 +24,6 @@ jobs:
           git_pat               = "${{ secrets.GIT_PAT }}"
           git_clone_username    = "${{ secrets.GIT_CLONE_USERNAME }}"
           s3_backup_bucket_name = "${{ secrets.S3_BACKUP_BUCKET_NAME }}"
-          instance_type         = "${{ secrets.INSTANCE_TYPE }}"
           key_name              = "${{ secrets.KEY_NAME }}"
           EOF
 
