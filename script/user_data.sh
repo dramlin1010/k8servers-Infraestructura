@@ -179,45 +179,22 @@ echo "Esperando a que cert-manager este completamente disponible..."
 kubectl wait --for=condition=Available=True deployment --all -n cert-manager --timeout=300s
 
 
-# DEJAR ESTO PARA EL FINAL QUE SI NO LET'S ENCRYPT NO ME DEJA ASIGNAR EL CERTIFICADO
-# echo "Creando ClusterIssuer letsencrypt-prod..."
-# cat <<EOT_ISSUER | kubectl apply -f -
-# apiVersion: cert-manager.io/v1
-# kind: ClusterIssuer
-# metadata:
-#   name: letsencrypt-prod
-# spec:
-#   acme:
-#     server: https://acme-v02.api.letsencrypt.org/directory
-#     email: ${TF_VAR_admin_email} # O la variable que uses
-#     privateKeySecretRef:
-#       name: letsencrypt-prod-account-key
-#     solvers:
-#     - http01:
-#         ingress: {}
-# EOT_ISSUER
-# echo "ClusterIssuer letsencrypt-prod comentado/deshabilitado temporalmente."
-
-echo "Creando ClusterIssuer letsencrypt-staging..."
-cat <<EOT_STAGING_ISSUER | kubectl apply -f -
+echo "Creando ClusterIssuer letsencrypt-prod..."
+cat <<EOT_ISSUER | kubectl apply -f -
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
-  name: letsencrypt-staging
+  name: letsencrypt-prod
 spec:
   acme:
-    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    server: https://acme-v02.api.letsencrypt.org/directory
     email: ${TF_VAR_admin_email}
     privateKeySecretRef:
-      name: letsencrypt-staging-account-key
+      name: letsencrypt-prod-account-key
     solvers:
     - http01:
-        ingress:
-          ingressClassName: nginx
-EOT_STAGING_ISSUER
-echo "ClusterIssuer letsencrypt-staging creado."
-
-
+        ingress: {}
+EOT_ISSUER
 
 echo "Instalando Python3 y pip (si no existen) y botocore..."
 apt-get install -y python3 python3-pip
